@@ -1,0 +1,282 @@
+```{r eval = FALSE, message = FALSE}
+library(readxl)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(knitr)
+library(MASS)
+library(BSDA)
+library(WGCNA)
+library(randomForest)
+library(fuzzyforest)
+```
+
+## Part 1. Data Analysis with WRST, WSRT, and Fisher Sign Test 
+```{r}
+hiv <- read_excel('C:/Users/mondals/Desktop/final project.xlsx')
+head(hiv)
+```
+
+```{r}
+hiv_contents <- apply(hiv, 2,unique)
+
+hiv_tables <- apply(hiv, 2, function(x) addmargins(table(x))) #no missing values
+
+```
+
+There are no missing values. The data is not equally spaced since the visits are occurring at different times (noted from the fact that the visit dates differed from patient to patient). Based on the table statements, it should also be noted that some patients have 4 visits. 
+
+```{r}
+#how many patients total
+num_patients<- length(table(hiv$Patient_ID))
+#find proportions of hiv infected vs noninfected
+hiv_props <- hiv %>% select(visit, HIV) %>%
+  filter(visit == 1) %>% group_by(HIV) %>% summarize(count = n())
+hiv_props
+```
+
+```{r}
+#look at DNAmAge
+hist(hiv$DNAmAge, main = 'Histogram of DNAmAge', xlab = 'DNAmAge')
+```
+
+```{r}
+#how does DNAmage compare to AGE?
+ggplot(data = hiv) + 
+  geom_point(mapping = aes(x = AGE, y = DNAmAge)) + 
+  geom_abline(slope = 1)
+
+ggplot(data= hiv) + 
+  geom_point(mapping = aes(x = AGE, y = DNAmAge)) + 
+  geom_abline(slope = 1) + 
+  facet_grid(~HIV)
+```
+
+As a primary exploration, I look at DNA methylation age(?) as a linear function of AGE. In particular, I wanted to look to see if patient's actual age correspond to their DNAmage. If they did, all points would fall along the y = x line. What we see here is that for most patients, their DNAmAge is greater than than their actual age. We could have probably observed that by looking the AgeAccelerationDiff variable though :). 
+
+When we look at DNAmAGE as as outcome variable by HIV infected and non-infected groups, we see that almost everyone has higher DNAmAGEs compared to their actual age. 
+
+```{r message = FALSE, warning = FALSE}
+#Is there a difference between DNAmAGE between HIV and non HIV patients at baseline?
+
+hiv_baseline <- hiv %>%
+  filter(visit == 1)
+
+ggplot(data = hiv_baseline) + geom_histogram(mapping = aes(x = DNAmAge), binwidth = 5) +
+  facet_grid(~HIV)
+```
+
+At baseline, when we compare DNAmAge, we see that the age distribution is also further to the right for the HIV patients, but that that the distribution is right skewed for non-HIV patients. The age distribution is more normally distributed for HIV infected patients. The mean DNAmAGE for HIV non infected patients seems lower than infected patients.
+
+```{r}
+ggplot (data = hiv_baseline) + 
+  geom_point(mapping = aes(x = AGE, y = DNAmAge)) + 
+  geom_abline(slope = 1) + 
+  facet_grid(~HIV)
+```
+
+Even at baseline, we see that for HIV infected patients, DNAmAge is greater than actual AGe. 
+
+```{r}
+#Is the difference in median DNAmAge for HIV and non-HIV patients significant?
+
+noHIV<- hiv_baseline$DNAmAge[hiv_baseline$HIV == 0]
+HIV<- hiv_baseline$DNAmAge[hiv_baseline$HIV == 1]
+
+#use wilcoxon rank sum test
+wilcox.test(HIV, noHIV, alternative = 'two.sided') 
+```
+
+There is evidence to suggest that that the median DNAmAge for HIV patients is greater than the median DNAmgAGE for nonHIV patients at baseline (W = 186, p-val = .002). Basically, there is evidence to suggest that HIV ages you. 
+
+```{r}
+#DNAmage across all timepoints
+ggplot(data = hiv) + geom_line(mapping = aes(x = visit , y = DNAmAge,
+                                             group = Patient_ID)) + 
+                    facet_grid(~HIV)
+```
+
+Based on the spaghetti plot, we see that there is a tendency for DNAmAge to go up at the second visit and then come down by the third visit. Qualitatively speaking, there is some evidence that the medication works in DNAmAge reduction. However, there is some variability as well because we see some patients that have increases in DNAmAge as well. 
+
+```{r}
+#Effect of medication between visit 1 and 2 for HIV patients
+hiv1 <- hiv %>% filter(HIV == 1) %>%
+  group_by(Patient_ID) %>%
+  summarize(diff1 = DNAmAge[2]-DNAmAge[1])
+
+hist(hiv1$diff1, main = 'Distribution of DNAmAge Differences', 
+     xlab = 'DNAmAge') 
+
+
+```
+
+The distribution is bit left skewed, but we will assume symmetry to apply the Wilcoxon Rank Sum Test. 
+
+```{r}
+hiv1_vis12 <- hiv %>%
+  filter(HIV == 1) %>% group_by(Patient_ID) %>%
+  summarize(fir_vis = DNAmAge[1],
+            second_vis = DNAmAge[2]) 
+
+
+wilcox.test(x = hiv1_vis12$fir_vis, y = hiv1_vis12$second_vis, paired = TRUE)
+```
+
+Upon inspection, we see that the DNAmAge is higher at second visit. However, statistically speaking, there is no evidence to suggest that the median DNAmAge between the first and second visits are different at the alpha level .05 for HIV patients (V = 33, p-val = .1354). This suggests that between visits 1 and 2 there was no medication effect. This would make sense because patients were only given HIV medication at the second visit. 
+
+Now we would like to see if there was a medication effect across time. We see that there is no medication effect from Visit 1 to Visit 2, perhaps there could be a medication effect from Visit 2 to Visit 3. 
+
+```{r}
+hiv1_vis23 <- hiv %>%
+  filter(HIV == 1) %>%
+  group_by(Patient_ID) %>%
+  summarize(second_vis = DNAmAge[2],
+            third_vis = DNAmAge[3]) %>%
+  mutate(diff = third_vis-second_vis)
+
+hist(hiv1_vis23$diff, main = 'Distribution in DNAmAge between 2nd and 3rd visit')
+
+SIGN.test(hiv1_vis23$diff)
+```
+
+Similarly here, the distribution is more left skewed. We apply Fisher Sign Test, even though it has less power. 
+
+From visit 2 to 3, qualitatively speaking, we see that there is a decrease in DNAmAge. However, the decrease is not statistically significant. There is no evidence to suggest that median DNAmAges differ from visit 2 to 3. This in turn suggests that there is no medication effect from visit 2 to visit 3 on DNAmage alpha level .05 (s = 8, p = 1). 
+
+There are many biomarkers that are associated with HIV. Here, we will work with 5 specifically: T4_DRn38ponROp4p, T4_DRp38ponROp4p,  T4_DRn38pon4p, T4_DRn38ponROp8p, T4_DRn38pon8p. 
+
+We would like to visualize differences in levels of expression for these 5 biomarkers between HIV and non-HIV patients and if these differences are statistically significant. 
+
+```{r}
+marker_hist <- hiv[,c('HIV', 
+                      'T4_DRn38ponROp4p', 
+                      'T4_DRp38ponROp4p',
+                      'T4_DRn38pon4p',
+                      'T4_DRn38ponROp8p',
+                      'T4_DRn38pon8p')]
+
+titles <- names(marker_hist)[2:6]
+invisible(mapply(hist, marker_hist[2:6], main = titles))
+```
+
+```{r}
+
+ggplot (data = marker_hist) + 
+  geom_histogram(mapping = aes(x = T4_DRn38ponROp4p), binwidth = 10) + 
+  facet_grid(~HIV) + theme_classic()
+
+ggplot(data = marker_hist) + 
+  geom_histogram(mapping = aes(x = T4_DRp38ponROp4p), binwidth = 10) + 
+  facet_grid(~HIV) + 
+  theme_classic()
+
+ggplot(data = marker_hist) + 
+  geom_histogram(mapping = aes(x = T4_DRn38pon4p), binwidth = 10) + 
+  facet_grid(~HIV) + 
+  theme_classic()
+
+ggplot(data = marker_hist) + 
+  geom_histogram(mapping = aes(x = T4_DRn38ponROp8p), binwidth = 10) + 
+  facet_grid(~HIV) + 
+  theme_classic()
+
+ggplot(data = marker_hist) + 
+  geom_histogram(mapping = aes(x = T4_DRn38pon8p), binwidth = 10) + 
+  facet_grid(~HIV) + 
+  theme_classic()
+
+
+```
+
+
+We see that all 5 markers have distinct levels of expression.Now let's see if they differ when we look at HIV versus non-HIV groups. We see that there are differences in gene expression when we compare gene expression between HIV positive and HIV negative groups. In particular, we see that for the 'T4_DRp38ponROp4p' biomarker, non-HIV patients tend to cluster between 0 and 15, while HIV patients range in values between 0 and 40. Furthermore, most measurements fall in the range of 10-20 for HIV patients. The mean expression for this particular biomarker seems to be shifted downwards for HIV positive patients. For other biomarkers, there are differences in expression as well, but they are not as distinct.
+
+
+```{r}
+wilcox.test(x = hiv$T4_DRn38ponROp4p[hiv$HIV == 0], y = hiv$T4_DRn38ponROp4p[hiv$HIV == 1])
+wilcox.test(x = hiv$T4_DRp38ponROp4p[hiv$HIV == 0], y = hiv$T4_DRp38ponROp4p[hiv$HIV == 1])
+wilcox.test(x = hiv$T4_DRn38pon4p[hiv$HIV == 0], y = hiv$T4_DRn38pon4p[hiv$HIV == 1])
+wilcox.test(x = hiv$T4_DRn38ponROp8p[hiv$HIV == 0], y = hiv$T4_DRn38ponROp8p[hiv$HIV == 1])
+wilcox.test(x = hiv$T4_DRn38pon8p[hiv$HIV == 0], y = hiv$T4_DRn38pon8p[hiv$HIV == 1])
+```
+
+Upon noticing that levels of gene expression differ for all the biomarkers and that gene expression also differs between HIV positive and HIV negative groups, we test to see whether differences in gene expression between HIV positive and HIV negative groups are statistically significant. We will use Wilcoxon Rank Sum Test to do so. Most distributions were symmetric enough so that this assumption is not violated with the exception of 'T4_DRp38ponROp4p' and 'T4_DRn38pon4p'. For the latter biomarkers mentioned, even the assumption is violated, we will still apply WRST to test for differences in levels of expression.  
+
+When we apply the Wilcoxon Rank Sum Test, we see that for all biomarkers except for T4_DRn38pon8p, there are statistically significant differences in median levels of expression when we compare HIV positive patients to non-HIV positive patients. It should also be noted that R does not add a tie correction to the Wilcoxon Rank Sum exact calculation; rather R uses large sample approximation when there is ties. This might skew the p-values reported above since n is only 15.  
+
+As a next step, we we would look to see if there is a temporal relationship to levels of gene expression and how the temporal relationship differs parituclarly when HIV patients start taking medication. 
+
+## Part 2. Fuzzy Forest
+
+We have seen above that most patients are experiencing age acceleration at the genetic level and HIV patients tend to age faster than the non-HIV patients. 
+
+Hence, the goal of this analysis was to understand which predictors are most related to AgeAccelDiff (the difference between DNAmAge and actual age) in an attempt to understand which factors cause patients to age fastest. We will utilize both HIV negative and HIV positive patients in the same analysis, even though there are inherent differences between the two groups. 
+
+```{r}
+hiv <- hiv %>%
+  mutate(AgeAccel2 = ifelse(AgeAccelerationDiff > 0, 1, 0))
+```
+
+```{r}
+set.seed(1)
+ind_vars <- hiv[,!names(hiv) %in% c('Patient_ID', 'AGE', 'DNAmAge', 
+                                    'BirthYear', 'VisitYear', 'AgeAccelerationDiff', 'AgeAccel2')]
+
+resp_vars<- data.frame(hiv[,'AgeAccel2'])
+resp_vars <- resp_vars[,1]
+```
+
+```{r}
+net <- blockwiseModules(ind_vars, power = 6, minModuleSize = 1)
+```
+
+
+```{r}
+module_membership <- net$colors
+```
+
+```{r}
+mtry_factor <- 1 
+min_ntree <- 500
+drop_fraction <- .7
+ntree_factor <- 1
+nodesize <- 1
+final_ntree <- 1000 
+
+screen_params <- screen_control(
+  drop_fraction = drop_fraction,
+  keep_fraction = .2,
+  min_ntree = min_ntree,
+  ntree_factor = ntree_factor,
+  mtry_factor = mtry_factor
+)
+
+select_params <- select_control(
+  drop_fraction = drop_fraction, 
+  number_selected = 5, 
+  min_ntree = min_ntree, 
+  ntree_factor = ntree_factor, 
+  mtry_factor = mtry_factor 
+)
+```
+
+```{r}
+ff_fit <- ff(X = ind_vars, y = as.factor(resp_vars), module_membership = module_membership,
+            screen_params = screen_params, select_params=select_params,
+            final_ntree = final_ntree)
+```
+
+```{r}
+rankings <- ff_fit$feature_list
+rankings
+```
+
+
+```{r}
+final_rf <- ff_fit$final_rf
+modplot(ff_fit)
+```
+
+```{r}
+varImpPlot(final_rf)
+```
